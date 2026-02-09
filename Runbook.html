@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Support L1/L2 Runbook Assistant</title>
+    <style>
+        :root { --primary: #004b87; --bg: #f4f7f6; --card: #ffffff; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: var(--bg); color: #333; margin: 0; padding: 20px; display: flex; justify-content: center; }
+        .container { width: 100%; max-width: 800px; background: var(--card); padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h1 { color: var(--primary); text-align: center; border-bottom: 2px solid #eee; padding-bottom: 15px; }
+        .step-box { border: 1px solid #ddd; border-left: 5px solid var(--primary); padding: 15px; margin-bottom: 20px; border-radius: 4px; background: #fafafa; }
+        label { display: block; font-weight: bold; margin-top: 10px; margin-bottom: 5px; color: #555; }
+        input[type="text"], textarea, select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; font-size: 14px; }
+        button { background-color: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; margin-top: 10px; transition: 0.3s; }
+        button:hover { background-color: #003366; }
+        .hidden { display: none; }
+        .output-area { background: #2d2d2d; color: #50fa7b; padding: 15px; border-radius: 5px; font-family: 'Courier New', Courier, monospace; margin-top: 20px; white-space: pre-wrap; }
+        .tag { display: inline-block; background: #e1ecf4; color: #39739d; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-bottom: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🏦 L1/L2 Support Runbook</h1>
+    
+    <div class="step-box">
+        <h3>1. 輸入 Ticket 資訊</h3>
+        <label>ServiceNow Incident Title (標題):</label>
+        <input type="text" id="incidentTitle" placeholder="例如: Mobile App Transfer Timeout / 網銀登入失敗..." oninput="detectScenario()">
+        <p style="font-size: 12px; color: #888;">系統會根據標題關鍵字自動推薦 SOP</p>
+    </div>
+
+    <div id="playbookArea" class="hidden">
+        <div class="step-box">
+            <h3 id="scenarioName">偵測到的場景：通用檢查</h3>
+            <span class="tag">SOP 執行中</span>
+            
+            <div id="dynamicContent">
+                </div>
+        </div>
+        <button onclick="generateResponse()">生成 ServiceNow 回覆</button>
+    </div>
+
+    <div id="resultArea" class="hidden">
+        <h3>📋 複製並貼上到 ServiceNow:</h3>
+        <div class="output-area" id="finalOutput"></div>
+        <button onclick="copyToClipboard()">複製內容</button>
+    </div>
+</div>
+
+<script>
+    // 定義各種問題的 SOP 模板
+    const scenarios = {
+        'timeout': {
+            name: '交易逾時 / Pending (Transaction Timeout)',
+            steps: [
+                { label: '受影響的交易序號 (Transaction IDs)', id: 'txnId', placeholder: 'e.g., TXN12345678, TXN87654321' },
+                { label: '查詢 Application Log 的結果', id: 'logCheck', placeholder: 'e.g., Log shows connection timeout to Core Banking System' },
+                { label: '查詢 Database 狀態 (是否已扣款?)', id: 'dbStatus', placeholder: 'e.g., Status is PENDING in DB, no record in destination' },
+                { label: '採取行動 (Action Taken)', id: 'action', placeholder: 'e.g., Re-triggered via Admin Console OR Escaled to L3' }
+            ],
+            template: (data) => `[Analysis]\n- Incident triggered by transaction timeout alerts.\n- Affected Txn IDs: ${data.txnId}\n\n[Investigation]\n- Application Log Analysis: ${data.logCheck}\n- Database Status Verification: ${data.dbStatus}\n\n[Action Taken]\n- ${data.action}\n- Verified system health, currently stable.\n\n[Next Step]\n- Monitor for next 30 mins.`
+        },
+        'login': {
+            name: '用戶登入失敗 (Login Failure)',
+            steps: [
+                { label: '用戶 ID (User ID)', id: 'userId', placeholder: 'e.g., U100200' },
+                { label: '錯誤代碼 (Error Code displayed)', id: 'errCode', placeholder: 'e.g., ERR_AUTH_005' },
+                { label: 'AD/LDAP 狀態檢查', id: 'adStatus', placeholder: 'e.g., Account is LOCKED in Active Directory' },
+                { label: '解決方案', id: 'resolution', placeholder: 'e.g., Unlocked account via AD Manager' }
+            ],
+            template: (data) => `[Issue]\n- User reported login failure.\n- User ID: ${data.userId}\n- Error Code: ${data.errCode}\n\n[Diagnosis]\n- Checked Identity Provider (AD/LDAP): ${data.adStatus}\n\n[Resolution]\n- ${data.resolution}\n- Confirmed user can login successfully now.\n\n[Status]\n- Resolved.`
+        },
+        'default': {
+            name: '一般通用檢查 (General Issue)',
+            steps: [
+                { label: '問題描述 (Issue Description)', id: 'desc', placeholder: '詳細描述問題...' },
+                { label: '初步調查 (Investigation)', id: 'investigation', placeholder: '查了什麼 Log? 看到什麼?' },
+                { label: '處理方式 (Action)', id: 'action', placeholder: '做了什麼處置?' }
+            ],
+            template: (data) => `[Summary]\n${data.desc}\n\n[Investigation Log]\n${data.investigation}\n\n[Resolution/Action]\n${data.action}`
+        }
+    };
+
+    let currentScenario = 'default';
+
+    function detectScenario() {
+        const title = document.getElementById('incidentTitle').value.toLowerCase();
+        const area = document.getElementById('playbookArea');
+        const content = document.getElementById('dynamicContent');
+        const titleHeader = document.getElementById('scenarioName');
+        
+        area.classList.remove('hidden');
+        document.getElementById('resultArea').classList.add('hidden');
+
+        // 簡單的關鍵字比對邏輯
+        if (title.includes('timeout') || title.includes('逾時') || title.includes('pending')) {
+            currentScenario = 'timeout';
+        } else if (title.includes('login') || title.includes('登入') || title.includes('lock')) {
+            currentScenario = 'login';
+        } else {
+            currentScenario = 'default';
+        }
+
+        // 渲染對應的輸入框
+        const scenarioData = scenarios[currentScenario];
+        titleHeader.innerText = "偵測到的場景： " + scenarioData.name;
+        
+        // 避免重複渲染，只有切換場景時才重繪
+        if (content.dataset.scenario !== currentScenario) {
+            content.innerHTML = '';
+            scenarioData.steps.forEach(step => {
+                content.innerHTML += `
+                    <div style="margin-bottom:15px;">
+                        <label>${step.label}</label>
+                        <input type="text" id="${step.id}" placeholder="${step.placeholder}">
+                    </div>
+                `;
+            });
+            content.dataset.scenario = currentScenario;
+        }
+    }
+
+    function generateResponse() {
+        const scenarioData = scenarios[currentScenario];
+        let data = {};
+        
+        // 收集輸入的資料
+        scenarioData.steps.forEach(step => {
+            data[step.id] = document.getElementById(step.id).value || '(None)';
+        });
+
+        // 產生文字
+        const responseText = scenarioData.template(data);
+        
+        document.getElementById('finalOutput').innerText = responseText;
+        document.getElementById('resultArea').classList.remove('hidden');
+    }
+
+    function copyToClipboard() {
+        const text = document.getElementById('finalOutput').innerText;
+        navigator.clipboard.writeText(text).then(() => {
+            alert('內容已複製！請貼上到 ServiceNow Work Notes');
+        });
+    }
+</script>
+
+</body>
+</html>
