@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>Runbook Editor (Admin)</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script type="module">
+        import { Octokit } from "https://cdn.skypack.dev/@octokit/rest";
+        window.Octokit = Octokit;
+    </script>
+</head>
+<body class="bg-light p-4">
+
+<div class="container bg-white p-5 rounded shadow">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>🛠️ Runbook 編輯器</h2>
+        <button class="btn btn-success" onclick="saveToGitHub()">💾 儲存到 GitHub</button>
+    </div>
+
+    <div class="alert alert-warning">
+        <div class="row g-2">
+            <div class="col-md-3">
+                <input type="text" id="ghToken" class="form-control form-control-sm" placeholder="GitHub Token (ghp_...)">
+            </div>
+            <div class="col-md-3">
+                <input type="text" id="ghOwner" class="form-control form-control-sm" placeholder="Username (Owner)">
+            </div>
+            <div class="col-md-3">
+                <input type="text" id="ghRepo" class="form-control form-control-sm" placeholder="Repo Name">
+            </div>
+             <div class="col-md-3">
+                <button onclick="loadFromGitHub()" class="btn btn-sm btn-outline-dark w-100">📥 載入現有資料</button>
+            </div>
+        </div>
+        <small class="text-muted">Token 僅存在瀏覽器記憶體中，不會外洩。請確保 Repo 有 `data.json` 檔案。</small>
+    </div>
+
+    <hr>
+
+    <div class="mb-3">
+        <label>Runbook 標題</label>
+        <input type="text" id="newTitle" class="form-control" placeholder="例如: Payment Timeout SOP">
+    </div>
+
+    <div id="stepsArea">
+        </div>
+
+    <button class="btn btn-outline-primary mt-3 w-100" onclick="addStep()">+ 新增步驟</button>
+
+</div>
+
+<script type="module">
+    let currentData = []; // 儲存所有的 SOP
+
+    window.addStep = function() {
+        const div = document.createElement('div');
+        div.className = "card p-3 mb-3 border-secondary step-item";
+        div.innerHTML = `
+            <div class="mb-2">
+                <label class="fw-bold">步驟類型</label>
+                <select class="form-select step-type" onchange="toggleFields(this)">
+                    <option value="info">純文字指引 (Instruction)</option>
+                    <option value="command">執行指令 (Command)</option>
+                    <option value="decision">決策選項 (Decision)</option>
+                </select>
+            </div>
+            <div class="mb-2">
+                <label>步驟標題</label>
+                <input type="text" class="form-control step-title" placeholder="例如: 檢查 Log">
+            </div>
+            <div class="mb-2">
+                <label>詳細說明</label>
+                <textarea class="form-control step-desc"></textarea>
+            </div>
+            <div class="mb-2 cmd-field hidden">
+                <label>指令代碼</label>
+                <input type="text" class="form-control step-cmd" placeholder="grep error...">
+            </div>
+            <button class="btn btn-danger btn-sm" onclick="this.parentElement.remove()">刪除步驟</button>
+        `;
+        document.getElementById('stepsArea').appendChild(div);
+    }
+
+    window.toggleFields = function(select) {
+        const parent = select.closest('.card');
+        const cmdField = parent.querySelector('.cmd-field');
+        if (select.value === 'command') {
+            cmdField.classList.remove('hidden');
+        } else {
+            cmdField.classList.add('hidden');
+        }
+    }
+
+    // 儲存邏輯
+    window.saveToGitHub = async function() {
+        const token = document.getElementById('ghToken').value;
+        const owner = document.getElementById('ghOwner').value;
+        const repo = document.getElementById('ghRepo').value;
+
+        if(!token || !owner || !repo) {
+            alert("請填寫 GitHub 資訊！");
+            return;
+        }
+
+        // 1. 收集畫面上的資料
+        const newSop = {
+            title: document.getElementById('newTitle').value,
+            steps: []
+        };
+
+        document.querySelectorAll('.step-item').forEach(item => {
+            const type = item.querySelector('.step-type').value;
+            const step = {
+                title: item.querySelector('.step-title').value,
+                desc: item.querySelector('.step-desc').value,
+                type: type
+            };
+            if(type === 'command') {
+                step.cmd = item.querySelector('.step-cmd').value;
+            }
+            newSop.steps.push(step);
+        });
+
+        // 加入現有資料 (簡單起見，這裡先假設只 append 一筆)
+        currentData.push(newSop);
+        const jsonString = JSON.stringify(currentData, null, 2);
+        
+        // 2. 透過 API 寫入 GitHub
+        const octokit = new window.Octokit({ auth: token });
+        
+        try {
+            // 先拿 SHA (GitHub 修改檔案需要先知道檔案目前的指紋)
+            const { data: fileData } = await octokit.rest.repos.getContent({
+                owner, repo, path: "data.json"
+            });
+            
+            // 更新檔案
+            await octokit.rest.repos.createOrUpdateFileContents({
+                owner, repo, path: "data.json",
+                message: "Update SOP via Web Editor",
+                content: btoa(unescape(encodeURIComponent(jsonString))), // Base64 編碼 (支援中文)
+                sha: fileData.sha
+            });
+            
+            alert("✅ 儲存成功！Runbook 已更新！");
+        } catch (e) {
+            console.error(e);
+            alert("❌ 儲存失敗，請檢查 Console Log (可能是 Token 權限不足或檔案不存在)");
+        }
+    }
+    
+    // 初始化載入
+    window.loadFromGitHub = async function() {
+        const token = document.getElementById('ghToken').value;
+        const owner = document.getElementById('ghOwner').value;
+        const repo = document.getElementById('ghRepo').value;
+        
+        if(!token) { alert("請輸入 Token"); return; }
+
+        const octokit = new window.Octokit({ auth: token });
+        try {
+            const { data } = await octokit.rest.repos.getContent({
+                owner, repo, path: "data.json"
+            });
+            // Decode Content
+            const content = decodeURIComponent(escape(atob(data.content)));
+            currentData = JSON.parse(content);
+            alert(`已載入 ${currentData.length} 筆 SOP，目前這是「新增」模式。`);
+        } catch (e) {
+            alert("讀取失敗或是新 Repo (尚未有 data.json)");
+            currentData = [];
+        }
+    }
+</script>
+
+<style>
+    .hidden { display: none; }
+</style>
+</body>
+</html>
