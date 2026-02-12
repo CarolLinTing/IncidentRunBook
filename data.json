@@ -1,1 +1,56 @@
-[]
+[
+  {
+    "id": "case_001",
+    "title": "🔴 [High] Payment Gateway Timeout (Dynatrace Alert)",
+    "tags": ["payment", "timeout", "dynatrace", "api"],
+    "steps": [
+      {
+        "type": "info",
+        "title": "SOP 啟動確認",
+        "desc": "收到 Dynatrace 告警 (P1/P2)。請先確認受影響的 Application ID 為 'APP_PAY_GATEWAY'。"
+      },
+      {
+        "type": "command",
+        "title": "檢查 Application Log (CyberArk)",
+        "desc": "登入 AP Server (10.20.30.x)，執行以下指令查看是否有 Exception：",
+        "cmd": "grep 'ERROR' /var/log/payment/txn.log | tail -n 5"
+      },
+      {
+        "type": "decision",
+        "title": "錯誤訊息判讀",
+        "desc": "根據上一步 Log 的 Output，請判斷錯誤類型：",
+        "options": ["Connection Refused (DB)", "NullPointer Exception (Code)", "No Error Found"]
+      },
+      {
+        "type": "command",
+        "title": "資料庫連線檢查",
+        "desc": "若為連線錯誤，請檢查 DB Listener 狀態：",
+        "cmd": "lsnrctl status"
+      },
+      {
+        "type": "info",
+        "title": "升級流程 (Escalation)",
+        "desc": "若 DB 異常，請立即開單給 DBA Team，並通知 IM (Incident Manager)。"
+      }
+    ]
+  },
+  {
+    "id": "case_002",
+    "title": "🟡 [Medium] User Account Locked (AD/LDAP)",
+    "tags": ["user", "login", "ad", "password"],
+    "steps": [
+      {
+        "type": "command",
+        "title": "查詢用戶狀態",
+        "desc": "請在 AD Server 執行 Powershell 查詢用戶鎖定時間：",
+        "cmd": "Get-ADUser -Identity $UserID -Properties LockedOut"
+      },
+      {
+        "type": "decision",
+        "title": "確認鎖定原因",
+        "desc": "詢問用戶是否多次輸入錯誤密碼？",
+        "options": ["是 (自行解鎖)", "否 (疑似被駭，轉資安)"]
+      }
+    ]
+  }
+]
