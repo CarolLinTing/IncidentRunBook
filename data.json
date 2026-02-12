@@ -16,5 +16,25 @@
     "tags": [
       "aa"
     ]
+  },
+  {
+    "title": "New SOP2",
+    "steps": [
+      {
+        "type": "command",
+        "title": "指令1",
+        "desc": "指令1說明",
+        "cmd": ""
+      },
+      {
+        "type": "command",
+        "title": "指令2",
+        "desc": "指令2說明",
+        "cmd": ""
+      }
+    ],
+    "tags": [
+      "aa bb"
+    ]
   }
 ]
