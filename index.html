@@ -2,130 +2,207 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>L2 Runbook Viewer</title>
+    <title>L1/L2 Support Runbook</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { background: #f8f9fa; padding: 20px; }
-        .card { box-shadow: 0 4px 6px rgba(0,0,0,0.1); border: none; }
-        .step-active { border-left: 5px solid #0d6efd; background: #fff; }
-        .hidden { display: none; }
+        body { background-color: #f4f6f8; }
+        .search-box { box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: none; padding: 15px; font-size: 1.1rem; }
+        .sop-card { cursor: pointer; transition: 0.2s; border-left: 5px solid transparent; }
+        .sop-card:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); border-left: 5px solid #0d6efd; }
+        .console-bg { background: #212529; color: #50fa7b; font-family: 'Consolas', monospace; padding: 15px; border-radius: 5px; }
+        .hidden { display: none !important; }
+        .step-completed { opacity: 0.6; pointer-events: none; }
     </style>
 </head>
 <body>
-<div class="container" style="max-width: 800px;">
-    <h2 class="mb-4 text-primary">🏦 Ops Runbook Center</h2>
-    
-    <div class="card p-3 mb-4">
-        <label class="form-label fw-bold">🔍 搜尋 Incident 關鍵字</label>
-        <select id="sopSelect" class="form-select" onchange="loadSop()">
-            <option value="">請選擇場景...</option>
-            </select>
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+    <div class="container">
+        <a class="navbar-brand fw-bold" href="#">🏦 Ops Runbook Center</a>
+        <div class="d-flex">
+            <a href="editor.html" class="btn btn-outline-info btn-sm">⚙️ 進入編輯模式 (Editor)</a>
+        </div>
+    </div>
+</nav>
+
+<div class="container" style="max-width: 900px;">
+
+    <div class="text-center mb-5" id="searchSection">
+        <h2 class="mb-3 text-secondary">遇到什麼 Incident？</h2>
+        <input type="text" id="searchInput" class="form-control search-box rounded-pill" 
+               placeholder="🔍 輸入關鍵字搜尋 (例如: payment, timeout, login...)" onkeyup="filterSOPs()">
+        
+        <div id="resultsArea" class="mt-4 text-start"></div>
     </div>
 
-    <div id="runbookArea" class="hidden">
-        <div class="card p-4">
-            <h3 id="sopTitle"></h3>
-            <hr>
-            <div id="stepContainer"></div>
-        </div>
+    <div id="executionSection" class="hidden">
+        <button class="btn btn-link text-decoration-none mb-3" onclick="goBack()">← 返回搜尋結果</button>
         
-        <div class="card p-4 mt-3 bg-dark text-white hidden" id="reportCard">
-            <h5>📋 ServiceNow Output</h5>
-            <textarea id="finalReport" class="form-control bg-secondary text-white" rows="6"></textarea>
-            <button class="btn btn-success mt-2" onclick="copyReport()">複製內容</button>
+        <div class="card shadow-sm border-0">
+            <div class="card-header bg-primary text-white p-3">
+                <h4 class="m-0" id="execTitle">Title</h4>
+            </div>
+            <div class="card-body p-4">
+                <div id="stepsContainer"></div>
+                
+                <div id="reportBox" class="mt-4 p-3 bg-light border rounded hidden">
+                    <h5 class="text-success">✅ 處理完成</h5>
+                    <p class="text-muted small">請複製以下內容回覆 ServiceNow：</p>
+                    <textarea id="finalOutput" class="form-control console-bg" rows="6"></textarea>
+                    <button class="btn btn-success mt-2 w-100" onclick="copyText()">📋 一鍵複製</button>
+                </div>
+            </div>
         </div>
     </div>
+
 </div>
 
 <script>
-    let sops = [];
+    let allSops = [];
     let currentSop = null;
-    let historyLog = [];
+    let logs = [];
 
-    // 1. 讀取 GitHub 上的 JSON 資料 (你的資料庫)
-    // 這裡假設 data.json 跟 html 在同一層
+    // 初始化：嘗試讀取 data.json
     fetch('data.json')
-        .then(response => response.json())
+        .then(res => res.json())
         .then(data => {
-            sops = data;
-            const select = document.getElementById('sopSelect');
-            sops.forEach((sop, index) => {
-                let opt = document.createElement('option');
-                opt.value = index;
-                opt.innerText = sop.title;
-                select.appendChild(opt);
-            });
+            allSops = data;
+            renderList(allSops); // 初始顯示所有
+        })
+        .catch(err => {
+            console.warn("找不到 data.json，使用內建模擬資料");
+            // 這裡為了防止你忘記放 json，直接寫入備用資料
+            allSops = [
+                { title: "🔴 [Example] Payment Timeout", tags: ["payment"], steps: [{type:"info", title:"Check Log", desc:"Run grep..."}] }
+            ];
+            renderList(allSops);
         });
 
-    function loadSop() {
-        const index = document.getElementById('sopSelect').value;
-        if (index === "") return;
+    // 搜尋過濾功能
+    function filterSOPs() {
+        const term = document.getElementById('searchInput').value.toLowerCase();
+        const filtered = allSops.filter(sop => {
+            // 搜尋標題 + Tags
+            return sop.title.toLowerCase().includes(term) || 
+                   (sop.tags && sop.tags.some(t => t.toLowerCase().includes(term)));
+        });
+        renderList(filtered);
+    }
+
+    // 渲染列表
+    function renderList(list) {
+        const area = document.getElementById('resultsArea');
+        area.innerHTML = '';
+        if(list.length === 0) {
+            area.innerHTML = '<div class="text-center text-muted">沒有找到相關 SOP 😅 <br> <a href="editor.html">去新增一個？</a></div>';
+            return;
+        }
+        list.forEach((sop, index) => {
+            // 找出原始 index 以便正確傳遞
+            const realIndex = allSops.indexOf(sop); 
+            area.innerHTML += `
+                <div class="card sop-card mb-3 p-3" onclick="startSOP(${realIndex})">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h5 class="m-0">${sop.title}</h5>
+                        <span class="badge bg-secondary">開始排查 &gt;</span>
+                    </div>
+                    <small class="text-muted mt-1">Tags: ${sop.tags ? sop.tags.join(', ') : 'none'}</small>
+                </div>
+            `;
+        });
+    }
+
+    // 開始執行 SOP
+    function startSOP(index) {
+        currentSop = allSops[index];
+        logs = [`Starting Incident Handling: ${currentSop.title}`];
         
-        currentSop = sops[index];
-        document.getElementById('runbookArea').classList.remove('hidden');
-        document.getElementById('sopTitle').innerText = currentSop.title;
-        document.getElementById('stepContainer').innerHTML = '';
-        historyLog = []; // 重置紀錄
+        document.getElementById('searchSection').classList.add('hidden');
+        document.getElementById('executionSection').classList.remove('hidden');
+        document.getElementById('execTitle').innerText = currentSop.title;
+        document.getElementById('stepsContainer').innerHTML = '';
+        document.getElementById('reportBox').classList.add('hidden');
+        
         renderStep(0);
     }
 
-    function renderStep(stepIndex) {
-        if (stepIndex >= currentSop.steps.length) {
-            generateReport();
+    function renderStep(stepIdx) {
+        if (stepIdx >= currentSop.steps.length) {
+            finishSOP();
             return;
         }
 
-        const step = currentSop.steps[stepIndex];
-        const container = document.getElementById('stepContainer');
+        const step = currentSop.steps[stepIdx];
+        const container = document.getElementById('stepsContainer');
         
+        // 建立 Step 卡片
         const div = document.createElement('div');
-        div.className = "mb-4 step-active p-3 rounded";
-        div.innerHTML = `<h5>Step ${stepIndex + 1}: ${step.title}</h5><p>${step.desc}</p>`;
+        div.className = "mb-4 border-bottom pb-4 fade-in";
+        div.id = `step-${stepIdx}`;
+        
+        let content = `<h5 class="text-primary">Step ${stepIdx + 1}: ${step.title}</h5>
+                       <p>${step.desc}</p>`;
 
+        // 根據類型顯示不同元件
         if (step.type === 'command') {
-            div.innerHTML += `<div class="bg-light p-2 font-monospace mb-2 border">${step.cmd}</div>`;
-            div.innerHTML += `<textarea class="form-control mb-2" id="input_${stepIndex}" placeholder="貼上執行結果..."></textarea>`;
-            div.innerHTML += `<button class="btn btn-primary btn-sm" onclick="nextStep(${stepIndex}, 'input')">下一步</button>`;
+            content += `<div class="console-bg mb-2">$ ${step.cmd}</div>
+                        <input type="text" class="form-control mb-2" id="input-${stepIdx}" placeholder="請貼上 Command Output...">
+                        <button class="btn btn-primary btn-sm" onclick="nextStep(${stepIdx}, 'cmd')">確認並下一步</button>`;
         } else if (step.type === 'decision') {
+            content += `<div class="d-flex gap-2">`;
             step.options.forEach(opt => {
-                div.innerHTML += `<button class="btn btn-outline-primary me-2" onclick="nextStep(${stepIndex}, 'decision', '${opt}')">${opt}</button>`;
+                content += `<button class="btn btn-outline-dark" onclick="nextStep(${stepIdx}, 'decision', '${opt}')">${opt}</button>`;
             });
+            content += `</div>`;
         } else {
-            div.innerHTML += `<button class="btn btn-primary btn-sm" onclick="nextStep(${stepIndex}, 'info')">下一步</button>`;
+            content += `<button class="btn btn-primary btn-sm" onclick="nextStep(${stepIdx}, 'info')">下一步</button>`;
         }
 
+        div.innerHTML = content;
         container.appendChild(div);
+        
+        // 滾動到底部
+        div.scrollIntoView({ behavior: 'smooth' });
     }
 
-    function nextStep(index, type, value) {
-        const step = currentSop.steps[index];
-        let log = `Step: ${step.title}\n`;
-        
-        if (type === 'input') {
-            const val = document.getElementById(`input_${index}`).value;
-            log += `Result: ${val}`;
-        } else if (type === 'decision') {
-            log += `Decision: ${value}`;
-        }
-        
-        historyLog.push(log);
-        
+    function nextStep(idx, type, val) {
         // 鎖定上一步
-        const oldInputs = document.querySelectorAll(`#input_${index}, button`);
-        // 簡單隱藏或變灰 (這裡簡略)
+        const currentDiv = document.getElementById(`step-${idx}`);
+        currentDiv.classList.add('step-completed');
+        
+        // 紀錄 Log
+        const step = currentSop.steps[idx];
+        let record = `[Step ${idx+1}] ${step.title}`;
+        
+        if (type === 'cmd') {
+            const inputVal = document.getElementById(`input-${idx}`).value;
+            record += `\n   > Output: ${inputVal}`;
+        } else if (type === 'decision') {
+            record += `\n   > Decision: ${val}`;
+        }
+        logs.push(record);
 
-        renderStep(index + 1);
+        // 下一步
+        renderStep(idx + 1);
     }
 
-    function generateReport() {
-        const report = `[Incident] ${currentSop.title}\n\n[Process Log]\n` + historyLog.join('\n\n') + `\n\n[Status]\nResolved according to Runbook.`;
-        document.getElementById('finalReport').value = report;
-        document.getElementById('reportCard').classList.remove('hidden');
+    function finishSOP() {
+        const report = `[Incident Report]\n${currentSop.title}\n\n[Investigation Log]\n${logs.join('\n')}\n\n[Status]\nResolved.`;
+        document.getElementById('finalOutput').value = report;
+        document.getElementById('reportBox').classList.remove('hidden');
+        document.getElementById('reportBox').scrollIntoView({ behavior: 'smooth' });
     }
-    
-    function copyReport() {
-        navigator.clipboard.writeText(document.getElementById('finalReport').value);
-        alert("已複製！");
+
+    function goBack() {
+        document.getElementById('executionSection').classList.add('hidden');
+        document.getElementById('searchSection').classList.remove('hidden');
+    }
+
+    function copyText() {
+        const txt = document.getElementById('finalOutput');
+        txt.select();
+        document.execCommand('copy');
+        alert('已複製到剪貼簿！');
     }
 </script>
 </body>
