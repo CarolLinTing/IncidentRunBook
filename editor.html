@@ -104,12 +104,12 @@
 </div>
 
 <script>
-    // --- 全域錯誤攔截 (防止白畫面) ---
+    // --- 全域錯誤攔截 ---
     window.onerror = function(msg, url, line) {
         const errorBox = document.getElementById('error-display');
         errorBox.style.display = 'block';
-        errorBox.innerHTML = `⚠️ 系統發生錯誤: ${msg} <br> <small>Line: ${line}</small>`;
-        document.getElementById('loading').classList.add('hidden'); // 關閉遮罩以便查看
+        errorBox.innerHTML = `⚠️ 系統錯誤: ${msg} <br> <small>Line: ${line}</small>`;
+        document.getElementById('loading').classList.add('hidden');
         return false;
     };
 
@@ -119,10 +119,7 @@
 
     // --- 初始化 ---
     window.onload = function() {
-        // 1. 關閉 Loading
         document.getElementById('loading').classList.add('hidden');
-        
-        // 2. 載入暫存設定
         if(localStorage.getItem('ghToken')) {
             document.getElementById('ghToken').value = localStorage.getItem('ghToken');
             document.getElementById('ghOwner').value = localStorage.getItem('ghOwner');
@@ -133,34 +130,44 @@
     // --- 核心功能: 載入 ---
     async function loadFromGitHub() {
         saveSettings();
-        const token = document.getElementById('ghToken').value;
-        const owner = document.getElementById('ghOwner').value;
-        const repo = document.getElementById('ghRepo').value;
+        const token = document.getElementById('ghToken').value.trim();
+        const owner = document.getElementById('ghOwner').value.trim();
+        const repo = document.getElementById('ghRepo').value.trim();
 
         if(!token) return alert("請輸入 GitHub Token");
-        
-        // 檢查 SDK 是否載入
-        if(!window.Octokit) return alert("GitHub SDK 尚未載入，請檢查網路連線 (esm.sh)");
+        if(!window.Octokit) return alert("GitHub SDK 尚未載入，請檢查網路");
 
         document.getElementById('loading').classList.remove('hidden');
 
         try {
             const octokit = new window.Octokit({ auth: token });
+            // 加上 timestamp 避免快取
             const { data } = await octokit.rest.repos.getContent({
                 owner, repo, path: "data.json", t: Date.now()
             });
 
+            // ★修正重點 1: 在載入新資料前，先切斷舊的索引，避免存檔錯誤
+            currentIndex = -1; 
+
+            // Base64 解碼 (支援中文)
             const content = decodeURIComponent(escape(atob(data.content)));
             allSops = JSON.parse(content);
-            renderList();
-            if(allSops.length > 0) loadSop(0);
             
-            alert("✅ 載入成功");
+            renderList();
+            if(allSops.length > 0) {
+                loadSop(0);
+            } else {
+                // 如果是空檔，清空編輯區
+                document.getElementById('stepsArea').innerHTML = '';
+            }
+            
+            alert(`✅ 成功載入 ${allSops.length} 筆 SOP`);
         } catch(e) {
             console.error(e);
             if(e.status === 404) {
                 alert("此 Repo 還沒有 data.json，已切換為新增模式。");
                 allSops = [];
+                currentIndex = -1;
                 createNewSop();
             } else {
                 alert("❌ 錯誤: " + e.message);
@@ -172,10 +179,12 @@
 
     // --- 核心功能: 儲存 ---
     async function saveToGitHub() {
-        saveCurrentEdit(); // 儲存當前編輯狀態
-        const token = document.getElementById('ghToken').value;
-        const owner = document.getElementById('ghOwner').value;
-        const repo = document.getElementById('ghRepo').value;
+        // 先儲存當前畫面上的修改
+        saveCurrentEdit(); 
+
+        const token = document.getElementById('ghToken').value.trim();
+        const owner = document.getElementById('ghOwner').value.trim();
+        const repo = document.getElementById('ghRepo').value.trim();
 
         if(!token) return alert("請輸入 Token");
 
@@ -184,7 +193,6 @@
         try {
             const octokit = new window.Octokit({ auth: token });
             
-            // 取得 SHA
             let sha;
             try {
                 const res = await octokit.rest.repos.getContent({ owner, repo, path: "data.json" });
@@ -195,7 +203,7 @@
             
             await octokit.rest.repos.createOrUpdateFileContents({
                 owner, repo, path: "data.json",
-                message: "Update via Editor",
+                message: "Update via Runbook Editor",
                 content: content,
                 sha: sha
             });
@@ -229,23 +237,46 @@
     }
 
     function loadSop(idx) {
+        // 切換前先存檔，但要確保不是初始狀態
         if(currentIndex !== -1) saveCurrentEdit();
+        
         currentIndex = idx;
         const sop = allSops[idx];
+        
+        // ★修正重點 2: 這裡加強防呆，如果資料有問題就不會崩潰
+        if (!sop) { 
+            console.error("找不到該索引的 SOP 資料"); 
+            return; 
+        }
+
         document.getElementById('editTitle').value = sop.title || '';
         document.getElementById('editTags').value = (sop.tags || []).join(',');
         
         const area = document.getElementById('stepsArea');
         area.innerHTML = '';
         (sop.steps || []).forEach(step => addStepItem(step));
+        
         renderList();
     }
 
+    // ★修正重點 3: 這就是原本報錯的函數，加上嚴格檢查
     function saveCurrentEdit() {
+        // 如果沒有選取任何 SOP，就不要執行儲存動作
         if(currentIndex === -1) return;
+        
+        // ★ 關鍵修正：檢查該位置是否真的有資料，沒有就跳出，防止報錯
+        if(!allSops[currentIndex]) {
+            console.warn("目前索引無對應資料，略過儲存");
+            return;
+        }
+
         const sop = allSops[currentIndex];
-        sop.title = document.getElementById('editTitle').value;
-        sop.tags = document.getElementById('editTags').value.split(',').filter(t=>t);
+        
+        const titleVal = document.getElementById('editTitle').value;
+        sop.title = titleVal; // 這裡原本會報錯，現在安全了
+
+        const tagsVal = document.getElementById('editTags').value;
+        sop.tags = tagsVal.split(',').map(t=>t.trim()).filter(t=>t);
         
         sop.steps = [];
         document.querySelectorAll('.step-item').forEach(el => {
@@ -261,20 +292,34 @@
     }
 
     function createNewSop() {
+        // 建立新資料前，先存舊的 (如果有的話)
+        if(currentIndex !== -1) saveCurrentEdit();
+        
         allSops.push({ title: "New SOP", steps: [] });
         loadSop(allSops.length - 1);
     }
 
     function deleteCurrentSop() {
+        if(currentIndex === -1) return;
         if(!confirm("確定刪除？")) return;
+        
         allSops.splice(currentIndex, 1);
+        
+        // 刪除後，將索引重置，避免系統試圖去存取被刪除的資料
         currentIndex = -1;
         document.getElementById('stepsArea').innerHTML = '';
+        document.getElementById('editTitle').value = '';
+        document.getElementById('editTags').value = '';
+        
         renderList();
+        
+        // 如果還有剩餘資料，載入第一筆
+        if(allSops.length > 0) {
+            loadSop(0);
+        }
     }
 
     // --- 步驟 UI 生成 ---
-    // 為了讓這段程式碼可以在 HTML onclick 中被呼叫，我們把它掛在 window 下
     window.addStepItem = function(data = {}) {
         const div = document.createElement('div');
         div.className = "card p-3 mb-2 bg-light step-item";
