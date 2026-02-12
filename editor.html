@@ -1,147 +1,51 @@
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Runbook Editor (Ultimate)</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        body { background-color: #f0f2f5; }
-        .step-item { transition: all 0.2s; border-left: 4px solid #0d6efd; }
-        .step-item:hover { transform: translateX(2px); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        .hidden { display: none; }
-        .loading-overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(255,255,255,0.8); z-index: 9999;
-            display: flex; justify-content: center; align-items: center;
-        }
-    </style>
-    <script type="module">
-        import { Octokit } from "https://cdn.skypack.dev/@octokit/rest";
-        window.Octokit = Octokit;
-    </script>
-</head>
-<body>
-
-<div id="loading" class="loading-overlay hidden">
-    <div class="spinner-border text-primary" role="status">
-        <span class="visually-hidden">Loading...</span>
-    </div>
-</div>
-
-<div class="container-fluid p-0">
-    <nav class="navbar navbar-dark bg-dark px-4 py-3">
-        <span class="navbar-brand mb-0 h1">🛠️ L2 Runbook 編輯器</span>
-        <div>
-            <a href="index.html" class="btn btn-outline-light btn-sm me-2">← 回到首頁</a>
-            <button class="btn btn-success fw-bold" onclick="saveToGitHub()">💾 儲存所有變更 (Save to GitHub)</button>
-        </div>
-    </nav>
-
-    <div class="bg-white border-bottom p-4 shadow-sm mb-4">
-        <div class="container">
-            <h5 class="text-primary mb-3">📡 GitHub 連線設定</h5>
-            <div class="row g-3">
-                <div class="col-md-4">
-                    <label class="form-label fw-bold small">GitHub Token (必填)</label>
-                    <input type="password" id="ghToken" class="form-control" placeholder="ghp_xxxxxxxxxxxxxxxxx">
-                    <div class="form-text">需勾選 <code>repo</code> 權限</div>
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label fw-bold small">Username (擁有者)</label>
-                    <input type="text" id="ghOwner" class="form-control" placeholder="e.g. jason-wang">
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label fw-bold small">Repository Name</label>
-                    <input type="text" id="ghRepo" class="form-control" placeholder="e.g. ops-runbook">
-                </div>
-                <div class="col-md-2 d-flex align-items-end">
-                    <button onclick="loadFromGitHub()" class="btn btn-primary w-100">📥 載入 / 連線</button>
-                </div>
-            </div>
-            <div class="form-check mt-2">
-                <input class="form-check-input" type="checkbox" id="rememberMe" checked>
-                <label class="form-check-label small text-muted" for="rememberMe">記住設定 (存於瀏覽器 LocalStorage)</label>
-            </div>
-        </div>
-    </div>
-
-    <div class="container">
-        <div class="row">
-            <div class="col-md-3 mb-4">
-                <div class="card shadow-sm h-100">
-                    <div class="card-header bg-light fw-bold d-flex justify-content-between align-items-center">
-                        <span>📚 SOP 列表</span>
-                        <span class="badge bg-secondary" id="countBadge">0</span>
-                    </div>
-                    <div class="list-group list-group-flush overflow-auto" id="sopList" style="max-height: 600px;">
-                        </div>
-                    <div class="card-footer p-2">
-                        <button class="btn btn-outline-primary w-100" onclick="createNewSop()">+ 新增 SOP</button>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-md-9 mb-5">
-                <div class="card shadow-sm" id="editorCard">
-                    <div class="card-body">
-                        <div class="row mb-3">
-                            <div class="col-md-8">
-                                <label class="form-label text-muted small">SOP Title</label>
-                                <input type="text" class="form-control fw-bold fs-5" id="editTitle" placeholder="請輸入標題...">
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label text-muted small">Tags (逗號分隔)</label>
-                                <input type="text" class="form-control" id="editTags" placeholder="e.g. payment, error">
-                            </div>
-                        </div>
-
-                        <hr>
-                        
-                        <h6 class="text-muted mb-3">步驟流程 (Steps)</h6>
-                        <div id="stepsArea" class="mb-4">
-                            </div>
-
-                        <div class="d-flex justify-content-between">
-                            <button class="btn btn-secondary" onclick="addStepItem()">+ 增加步驟</button>
-                            <button class="btn btn-outline-danger" onclick="deleteCurrentSop()">🗑️ 刪除此 SOP</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
 <script type="module">
+    // 改用更穩定的 esm.sh CDN
+    import { Octokit } from "https://esm.sh/@octokit/rest";
+    
+    // 綁定到 window 讓其他函式可以用
+    window.Octokit = Octokit;
+
     // 全域變數
     let allSops = [];
     let currentIndex = -1;
 
     // --- 1. 初始化與設定記憶 ---
     window.onload = function() {
+        // 隱藏 Loading (防止一開始就轉圈圈)
+        toggleLoading(false);
+
         if(localStorage.getItem('ghToken')) {
-            document.getElementById('ghToken').value = localStorage.getItem('ghToken');
-            document.getElementById('ghOwner').value = localStorage.getItem('ghOwner');
-            document.getElementById('ghRepo').value = localStorage.getItem('ghRepo');
+            const tokenInput = document.getElementById('ghToken');
+            if(tokenInput) {
+                tokenInput.value = localStorage.getItem('ghToken');
+                document.getElementById('ghOwner').value = localStorage.getItem('ghOwner');
+                document.getElementById('ghRepo').value = localStorage.getItem('ghRepo');
+            }
         }
     };
 
+    // 存到 LocalStorage
     function saveSettingsLocally() {
-        if(document.getElementById('rememberMe').checked) {
+        const checkbox = document.getElementById('rememberMe');
+        if(checkbox && checkbox.checked) {
             localStorage.setItem('ghToken', document.getElementById('ghToken').value.trim());
             localStorage.setItem('ghOwner', document.getElementById('ghOwner').value.trim());
             localStorage.setItem('ghRepo', document.getElementById('ghRepo').value.trim());
         }
     }
 
+    // 控制轉圈圈顯示/隱藏
     function toggleLoading(show) {
-        document.getElementById('loading').classList.toggle('hidden', !show);
+        const loader = document.getElementById('loading');
+        if(loader) {
+            if(show) loader.classList.remove('hidden');
+            else loader.classList.add('hidden');
+        }
     }
 
-    // --- 2. 讀取功能 (Load) ---
+    // 將函式掛載到 window 以便 HTML onclick 呼叫
     window.loadFromGitHub = async function() {
-        saveSettingsLocally(); // 先記住設定
+        saveSettingsLocally(); 
         
         const token = document.getElementById('ghToken').value.trim();
         const owner = document.getElementById('ghOwner').value.trim();
@@ -149,6 +53,12 @@
 
         if(!token || !owner || !repo) {
             alert("❌ 請填寫完整的 Token, Owner, Repo 欄位！");
+            return;
+        }
+
+        // 檢查 Octokit 是否載入成功
+        if (!window.Octokit) {
+            alert("❌ 系統錯誤：GitHub SDK 尚未載入完成，請重新整理網頁再試一次。\n(如果持續發生，請檢查網路是否能存取 esm.sh)");
             return;
         }
 
@@ -161,7 +71,7 @@
                 owner, repo, path: "data.json", t: new Date().getTime()
             });
             
-            // Base64 解碼 (支援中文)
+            // Base64 解碼 (修正中文亂碼問題)
             const jsonString = decodeURIComponent(escape(atob(data.content)));
             allSops = JSON.parse(jsonString);
             
@@ -172,43 +82,41 @@
         } catch (e) {
             console.error(e);
             if(e.status === 404) {
-                // 如果檔案不存在，初始化為空陣列
                 allSops = [];
                 renderSopList();
-                createNewSop(); // 自動建立第一筆
+                createNewSop();
                 alert("ℹ️ 此 Repo 尚未有 data.json，已切換為「新建立模式」。\n請編輯後按「儲存」來建立檔案。");
             } else if (e.status === 401) {
                 alert("❌ Token 權限不足 (401)！\n請確認 Token 正確且已勾選 'repo' 權限。");
             } else {
-                alert("❌ 連線失敗：" + e.message);
+                alert("❌ 連線失敗：" + e.message + "\n(請按 F12 查看 Console 詳細錯誤)");
             }
         } finally {
+            // 無論成功失敗，一定要關閉轉圈圈
             toggleLoading(false);
         }
     }
 
-    // --- 3. 儲存功能 (Save) ---
     window.saveToGitHub = async function() {
-        saveUpdateToMemory(); // 先把畫面上的資料存回變數
+        saveUpdateToMemory(); 
 
         const token = document.getElementById('ghToken').value.trim();
         const owner = document.getElementById('ghOwner').value.trim();
         const repo = document.getElementById('ghRepo').value.trim();
 
         if(!token) return alert("請先設定 Token！");
+        if (!window.Octokit) return alert("GitHub SDK 載入失敗");
 
         toggleLoading(true);
         const octokit = new window.Octokit({ auth: token });
         
         try {
-            // A. 先取得目前的 SHA (這是 GitHub 寫入必需的)
             let sha = undefined;
             try {
                 const { data } = await octokit.rest.repos.getContent({ owner, repo, path: "data.json" });
                 sha = data.sha;
-            } catch (e) { /* 404 代表是新檔案，sha 維持 undefined */ }
+            } catch (e) { /* 404 代表新檔案 */ }
 
-            // B. 轉碼並寫入
             const contentBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(allSops, null, 2))));
             
             await octokit.rest.repos.createOrUpdateFileContents({
@@ -222,32 +130,31 @@
 
         } catch (e) {
             console.error(e);
-            alert(`❌ 儲存失敗 (Error ${e.status}): ${e.message}\n請檢查 Console Log。`);
+            alert(`❌ 儲存失敗 (Error ${e.status}): ${e.message}`);
         } finally {
             toggleLoading(false);
         }
     }
 
-    // --- 4. UI 互動邏輯 ---
-
-    // 渲染左側列表
+    // --- UI 渲染邏輯 ---
     window.renderSopList = function() {
         const list = document.getElementById('sopList');
-        document.getElementById('countBadge').innerText = allSops.length;
-        list.innerHTML = '';
-        allSops.forEach((sop, idx) => {
-            const btn = document.createElement('button');
-            btn.className = `list-group-item list-group-item-action ${idx === currentIndex ? 'active' : ''}`;
-            btn.innerText = sop.title || '(未命名 SOP)';
-            btn.onclick = () => loadSopToEditor(idx);
-            list.appendChild(btn);
-        });
+        const badge = document.getElementById('countBadge');
+        if(badge) badge.innerText = allSops.length;
+        if(list) {
+            list.innerHTML = '';
+            allSops.forEach((sop, idx) => {
+                const btn = document.createElement('button');
+                btn.className = `list-group-item list-group-item-action ${idx === currentIndex ? 'active' : ''}`;
+                btn.innerText = sop.title || '(未命名 SOP)';
+                btn.onclick = () => loadSopToEditor(idx);
+                list.appendChild(btn);
+            });
+        }
     }
 
-    // 將資料載入編輯區
     window.loadSopToEditor = function(idx) {
-        if(currentIndex !== -1) saveUpdateToMemory(); // 切換前先存當前的
-
+        if(currentIndex !== -1) saveUpdateToMemory();
         currentIndex = idx;
         const sop = allSops[idx];
         
@@ -255,25 +162,25 @@
         document.getElementById('editTags').value = sop.tags ? sop.tags.join(', ') : '';
         
         const stepsContainer = document.getElementById('stepsArea');
-        stepsContainer.innerHTML = ''; // 清空舊步驟
+        stepsContainer.innerHTML = '';
         
         if(sop.steps && sop.steps.length > 0) {
             sop.steps.forEach(step => addStepItem(step));
-        } else {
-            // 如果沒有步驟，不顯示任何東西
         }
-        
-        renderSopList(); // 更新 active highlight
+        renderSopList();
     }
 
-    // 將畫面資料存回 allSops 變數
     function saveUpdateToMemory() {
         if(currentIndex === -1 || !allSops[currentIndex]) return;
-        
         const sop = allSops[currentIndex];
-        sop.title = document.getElementById('editTitle').value;
-        const tagsStr = document.getElementById('editTags').value;
-        sop.tags = tagsStr ? tagsStr.split(',').map(t=>t.trim()) : [];
+        const titleInput = document.getElementById('editTitle');
+        if(titleInput) sop.title = titleInput.value;
+        
+        const tagsInput = document.getElementById('editTags');
+        if(tagsInput) {
+            const tagsStr = tagsInput.value;
+            sop.tags = tagsStr ? tagsStr.split(',').map(t=>t.trim()) : [];
+        }
         
         sop.steps = [];
         document.querySelectorAll('.step-item').forEach(el => {
@@ -289,58 +196,44 @@
         });
     }
 
-    // 新增一筆空白 SOP
     window.createNewSop = function() {
         if(currentIndex !== -1) saveUpdateToMemory();
         allSops.push({ title: "New Incident SOP", tags: [], steps: [] });
         loadSopToEditor(allSops.length - 1);
     }
 
-    // 刪除目前 SOP
     window.deleteCurrentSop = function() {
-        if(!confirm("確定要刪除這筆 SOP 嗎？此動作無法復原。")) return;
-        
+        if(!confirm("確定要刪除這筆 SOP 嗎？")) return;
         allSops.splice(currentIndex, 1);
         currentIndex = -1;
         document.getElementById('stepsArea').innerHTML = '';
         document.getElementById('editTitle').value = '';
         document.getElementById('editTags').value = '';
-        
-        if(allSops.length > 0) {
-            loadSopToEditor(0);
-        } else {
-            renderSopList();
-        }
+        if(allSops.length > 0) loadSopToEditor(0);
+        else renderSopList();
     }
 
-    // --- 5. 步驟編輯 UI (動態生成) ---
     window.addStepItem = function(data = null) {
         const div = document.createElement('div');
         div.className = "card p-3 mb-3 bg-white step-item shadow-sm";
         div.innerHTML = `
             <div class="d-flex justify-content-between mb-2">
                 <select class="form-select form-select-sm w-auto bg-light border-0 fw-bold step-type" onchange="toggleStepFields(this)">
-                    <option value="info">ℹ️ 文字指引 (Info)</option>
-                    <option value="command">💻 執行指令 (Command)</option>
-                    <option value="decision">❓ 決策選項 (Decision)</option>
+                    <option value="info">ℹ️ 文字指引</option>
+                    <option value="command">💻 執行指令</option>
+                    <option value="decision">❓ 決策選項</option>
                 </select>
                 <button class="btn btn-close" onclick="this.closest('.step-item').remove()"></button>
             </div>
-            
-            <input type="text" class="form-control form-control-sm mb-2 fw-bold step-title" placeholder="步驟標題 (例如: Check Log)" value="${data?.title || ''}">
+            <input type="text" class="form-control form-control-sm mb-2 fw-bold step-title" placeholder="步驟標題" value="${data?.title || ''}">
             <textarea class="form-control form-control-sm mb-2 step-desc" placeholder="詳細說明..." rows="2">${data?.desc || ''}</textarea>
-            
             <div class="field-cmd hidden bg-dark p-2 rounded mb-2">
-                <label class="text-white small">Command:</label>
-                <input type="text" class="form-control form-control-sm font-monospace step-cmd bg-secondary text-white border-0" placeholder="grep error..." value="${data?.cmd || ''}">
+                <input type="text" class="form-control form-control-sm font-monospace step-cmd bg-secondary text-white border-0" placeholder="Command..." value="${data?.cmd || ''}">
             </div>
-            
             <div class="field-options hidden bg-warning bg-opacity-10 p-2 rounded mb-2">
-                <label class="small text-dark">選項 (用逗號隔開):</label>
-                <input type="text" class="form-control form-control-sm step-options" placeholder="Yes, No, Unknown" value="${data?.options ? data.options.join(',') : ''}">
+                <input type="text" class="form-control form-control-sm step-options" placeholder="選項 (用逗號隔開)" value="${data?.options ? data.options.join(',') : ''}">
             </div>
         `;
-        
         const typeSelect = div.querySelector('.step-type');
         if(data) typeSelect.value = data.type;
         document.getElementById('stepsArea').appendChild(div);
@@ -351,14 +244,9 @@
         const parent = select.closest('.step-item');
         const cmdField = parent.querySelector('.field-cmd');
         const optField = parent.querySelector('.field-options');
-        
         cmdField.classList.add('hidden');
         optField.classList.add('hidden');
-        
         if(select.value === 'command') cmdField.classList.remove('hidden');
         if(select.value === 'decision') optField.classList.remove('hidden');
     }
-
 </script>
-</body>
-</html>
